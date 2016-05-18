@@ -1,0 +1,143 @@
+# vim: ft=tcl ts=4 sw=4 expandtab tw=80 colorcolumn=80
+
+package require tcltest
+namespace import -force ::tcltest::*
+
+tcl::tm::path add [file join [file dirname [file dirname [info script]]] lib]
+package require bday
+
+proc config {} {
+    list path [file join [file dirname [info script]] tmp.dat]
+}
+
+proc setup {provider} {
+    bday create b $provider [config]
+}
+
+proc cleanup {} {
+    ::b destroy
+}
+
+proc kill-tmpfile {} {
+    file delete -force [dict get [config] path]
+    file delete -force [dict get [config] path]-lock ;# lmdb's lock file
+}
+
+foreach provider {textfile lmdb} {
+
+    kill-tmpfile
+
+    test $provider-1.1 {Construct} -setup {
+        setup $provider
+    } -body {
+        # Nothing.. just testing whther setup $provider/cleanup work
+    } -cleanup {
+        cleanup
+    }
+
+    test $provider-1.2 {setBirthday} -setup {
+        setup $provider
+    } -body {
+        ::b setBirthday Myself 1984-02-26
+    } -cleanup {
+        cleanup
+    }
+
+    test $provider-1.3 {getBirthday} -setup {
+        setup $provider
+    } -body {
+        ::b getBirthday Myself
+    } -cleanup {
+        cleanup
+    } -result {1984-02-26}
+
+    test $provider-1.4 {setBirthday modify} -setup {
+        setup $provider
+    } -body {
+        ::b setBirthday Myself 02-26
+        ::b getBirthday Myself
+    } -cleanup {
+        cleanup
+    } -result {0000-02-26}
+
+    test $provider-1.5 {setBirthday another} -setup {
+        setup $provider
+    } -body {
+        ::b setBirthday {Mary Lou} 07-24
+    } -cleanup {
+        cleanup
+    }
+
+    test $provider-1.6 {get birthday 1} -setup {
+        setup $provider
+    } -body {
+        set d [::b get]
+        foreach entry $d {
+            if {[dict get $entry person] eq {Myself}} {
+                set res [dict get $entry birthday]
+                break
+            }
+        }
+        set res
+    } -cleanup {
+        cleanup
+    } -result {0000-02-26}
+
+    test $provider-1.7 {get birthday 2} -setup {
+        setup $provider
+    } -body {
+        set d [::b get]
+        foreach entry $d {
+            if {[dict get $entry person] eq {Mary Lou}} {
+                set res [dict get $entry birthday]
+                break
+            }
+        }
+        set res
+    } -cleanup {
+        cleanup
+    } -result {0000-07-24}
+
+    test $provider-1.8 {getUpcoming} -setup {
+        setup $provider
+    } -body {
+        set upcoming [::b getUpcoming]
+        set mslist [lsearch -inline -index 1 $upcoming Myself]
+        set mllist [lsearch -inline -index 1 $upcoming {Mary Lou}]
+        list [dict get $mslist birthday] [dict get $mllist birthday]
+    } -cleanup {
+        cleanup
+    } -result {0000-02-26 0000-07-24}
+
+    # Test loading a whole lot of birthdays
+    test $provider-2.0 {Famous birthdays} -setup {
+        kill-tmpfile
+        setup $provider
+    } -body {
+        set map [dict create]
+        set fd [open [file join [file dirname [info script]] \
+            famousbirthdays famousbirthdays.tsv] r]
+        chan configure $fd -encoding utf-8 -translation crlf
+        while {[gets $fd line] >= 0} {
+            lassign [split $line "\t"] bday name
+            dict set map $name $bday
+            ::b setBirthday $name $bday
+        }
+        close $fd
+
+        foreach entry [::b get] {
+            set ename [dict get $entry person]
+            set ebday [dict get $entry birthday]
+            set mbday [dict get $map $ename]
+            if {$mbday ne $ebday} {
+                return -code error "$name: expected $mbday, got $ebday"
+            }
+        }
+    } -cleanup {
+        cleanup
+    }
+}
+
+kill-tmpfile
+
+cleanupTests

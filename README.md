@@ -1,0 +1,1 @@
+*bday* is a simple yet extensible command line birthday manager. It lets you add people's birthdays and provide facilities to display the list of upcoming recurrences in a number of ways or search for a particular one.

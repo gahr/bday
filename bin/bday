@@ -1,0 +1,306 @@
+#! /usr/bin/env tclsh8.6
+
+##
+#  Copyright (C) 2016 Pietro Cerutti <gahr@gahr.ch>
+#  
+#  Redistribution and use in source and binary forms, with or without
+#  modification, are permitted provided that the following conditions
+#  are met:
+#
+#  1. Redistributions of source code must retain the above copyright
+#     notice, this list of conditions and the following disclaimer.
+#
+#  2. Redistributions in binary form must reproduce the above copyright
+#     notice, this list of conditions and the following disclaimer in the
+#     documentation and/or other materials provided with the distribution.
+#  
+#  THIS SOFTWARE IS PROVIDED BY AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+#  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+#  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+#  ARE DISCLAIMED.  IN NO EVENT SHALL AUTHOR OR CONTRIBUTORS BE LIABLE
+#  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+#  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+#  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+#  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+#  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+#  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+#  SUCH DAMAGE.
+#
+
+# TODO
+# - "by" grouping
+# - formatters (csv)
+# - importers
+
+package require Tcl 8.6
+
+if {[info exists ::launchdir]} {
+    set libdir $::launchdir
+} else {
+    set myname [file normalize [info script]]
+    catch {set myname [file readlink $myname]}
+    set libdir [file join [file dirname [file dirname $myname]] lib]
+}
+tcl::tm::path add $libdir
+
+package require bday 0.1.0
+
+set program bday
+set version 0.1.0
+
+# Default config, can be overridden by the config file specified in the -c
+# argument
+array set conf {
+    provider                  textfile
+    provider::textfile::conf  {path ~/.bday.dat}
+    formatter                 cli
+    formatter::cli::conf      {%B(%m-%d) %N}
+    default_command           {next 10}
+}
+
+namespace eval cmd {
+
+    ##
+    # Print all upcoming birthdays. This is the default command called.
+    proc cmd_all {b argv} {
+        ::print [$b getUpcoming]
+    }
+
+    ##
+    # Set a person's birthday.
+    proc cmd_set {b argv} { cmd_add $b $argv }
+    proc cmd_add {b argv} {
+        set argc [llength $argv]
+        if {$argc % 2} {
+            return -code error \
+                "Usage: $::argv0 set ?name birthday ...?"
+        }
+
+        foreach {person birthday} $argv {
+            $b setBirthday $person $birthday
+        }
+
+        return
+    }
+
+    ##
+    # Remove a birthday
+    proc cmd_remove {b argv} {
+        foreach name $argv {
+            $b remove $name
+        }
+    }
+
+    ##
+    # Print people's birthdays
+    proc cmd_for {b argv} {
+        set r [list]
+        foreach entry [$b getUpcoming] {
+            if {[dict get $entry person] ni $argv} {
+                continue
+            }
+            lappend r $entry
+        }
+        ::print $r
+    }
+
+    ##
+    # Print a birthdays in a certain time range
+    proc cmd_in {b argv} {
+        set argc [llength $argv]
+        if {$argc != 2} {
+            return -code error "Usage: $::argv0 in count unit"
+        }
+        lassign $argv count unit
+        if {![string is entier $count] || $count < 1} {
+            return -code error "Invalid count: $count, must be positive"
+        }
+
+        set units {day days week weeks month months}
+        if {$unit ni $units} {
+            return -code error "Invalid unit: $unit, must be one of\
+                [join $units {, }]"
+        }
+
+        switch $unit {
+            day -
+            days {
+                set days [expr {$count + 1}]
+            }
+            week -
+            weeks {
+                set days [expr {$count * 7 + 1}]
+            }
+            month -
+            months {
+                set days [expr {$count * 30 + 1}] ;# Approx..
+            }
+        }
+
+        set r [list]
+        set l [::datelib::cadd $days days]
+        foreach entry [$b getUpcoming] {
+            if {[::datelib::next [dict get $entry birthday]] > $l} {
+                break
+            }
+            lappend r $entry
+        }
+        ::print $r
+    }
+
+    ##
+    # Print a number of birthdays
+    proc cmd_next {b argv} {
+        set argc [llength $argv]
+        if {$argc != 1} {
+            return -code error "Usage: $::argv0 next count"
+        }
+        if {![string is entier $argv] || $argv < 1} {
+            return -code error "Invalid count: $argv, must be positive"
+        }
+        set i -1
+        set r [list]
+        foreach entry [$b getUpcoming] {
+            if {[incr i] == $argv} {
+                break
+            }
+            lappend r $entry
+        }
+        ::print $r
+    }
+}
+
+# Parse config file.
+proc parseConfig {path} {
+    set fd [open $path r]
+    while {[gets $fd line] >= 0} {
+        set line [string trim $line]
+        if {$line eq {} || [string index $line 0] eq {#}} {
+            continue
+        }
+        lassign [lmap x [split $line =] { string trim $x }] key val
+        set ::conf($key) $val
+    }
+    close $fd
+}
+
+# Format and print a list of entries.
+proc print {l} {
+    package require formatter::$::conf(formatter)
+    set formatter $::conf(formatter)
+    if {[catch {set conf $::conf(formatter::${formatter}::conf)} msg]} {
+        set conf {}
+    }
+    set f [formatter::$formatter new $conf]
+    $f print $l
+    $f destroy
+}
+
+
+proc usage {} {
+    puts "This is $::program version $::version."
+    puts "© 2016 Pietro Cerutti <gahr@gahr.ch>"
+    puts {}
+    puts "Usage: $::program \[options] \[commands]"
+    puts {}
+    puts {OPTIONS}
+    puts {  -h                      Print this help message and exist}
+    puts {  -c <path>               Read config file from <path>}
+    puts {  -provider <p>           Use provier <p> for data retrieval and storage}
+    puts {  -provider::<p>::conf    Configuration for the provider <p>}
+    puts {  -formatter <f>          Use formatter <f> to print}
+    puts {  -formatter::<f>::conf   Configuration for the formatter <f>}
+    puts {}
+    puts {COMMAND}
+    puts {  all                     Print all upcoming birhtdays}
+    puts {  for ?<name> ...?        Print a list of people's birthdays}
+    puts {  add ?<name> <bday> ...? Add or modify a list of people's birthdays}
+    puts {  set ?<name> <bday> ...? Same as add}
+    puts {  remove ?<name> ...?     Remove a list of people's birthdays}
+    puts {  in <count> <unit>       Print birthdays in the next <count> <unit>s}
+    puts {  next <count>            Print the next <count> upcoming birthdays}
+
+    exit
+}
+
+proc main {} {
+
+    #
+    #  Parse config file.
+    #
+    set confIdx [lsearch $::argv -c]
+    if {$confIdx == -1} {
+        set confPath ~/.bday.conf
+    } else {
+        set confPath [lindex $::argv $confIdx+1]
+        set argv [lreplace $::argv $confIdx $confIdx+1]
+    }
+    if {$confPath eq {}} {
+        return -code error "Usage: $::argv0 -c configFile ..."
+    }
+    parseConfig $confPath
+
+    #
+    # Parse command line switches and override configuration.
+    #
+    while {[set idx [lsearch $::argv -*]] != -1} {
+        lassign [lrange $::argv $idx $idx+1] key val
+        set key [string range $key 1 end]
+        if {$key in {h help}} {
+            usage
+        }
+        set ::conf($key) $val
+        set ::argv [lreplace $::argv $idx $idx+1]
+    }
+
+    #
+    # The first word in the arguments list is the command. If none was given,
+    # use the configured default command.
+    #
+    if {[llength $::argv] == 0} {
+        set ::argv $::conf(default_command)
+    }
+
+    #
+    # Parse "by ..." arguments
+    # TODO
+    #
+    set byIdx [lsearch $::argv by]
+    if {$byIdx != -1 && [llength $::argv] != $byIdx+1} {
+        set conf(by_fmt) [lindex $::argv $byIdx+1]
+        set ::argv [lreplace $::argv $byIdx $byIdx+1]
+    }
+
+    #
+    # Arguments list is clean. Get command name
+    #
+    set cmd [lindex $::argv 0]
+
+    #
+    # If the command doesn't correspond to an existing implementation, assume
+    # it's the name of a person and call "for" instead.
+    #
+    if {[info procs ::cmd::cmd_$cmd] eq {}} {
+        set cmd for
+    } else {
+        # Shift arguments list. The first one was the command.
+        set ::argv [lrange $::argv 1 end]
+    }
+
+    #
+    # Create a bday instance and invoke the command
+    #
+    set pname $::conf(provider)
+    set pconf $::conf(provider::${pname}::conf)
+    set b [bday new $pname $pconf]
+    ::cmd::cmd_$cmd $b $::argv
+
+    #
+    # All done, cleanup..
+    #
+    $b destroy
+}
+
+main
+
+# vim: ft=tcl ts=4 sw=4 expandtab tw=79 colorcolumn=80
