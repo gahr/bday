@@ -93,6 +93,19 @@ oo::class create provider::lmdb {
     }
 
     ##
+    # Remove a person's birthday
+    method remove {person} {
+        variable myenv
+        variable mydbi
+
+        set txn [$myenv txn]
+        $mydbi del $person {} -txn $txn
+        $txn commit
+        $txn close
+        return
+    }
+
+    ##
     # Return the content of the database. Only the basic "person" and
     # "birthday" attribute is supported by this implementation.
     method get {} {
