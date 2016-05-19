@@ -32,6 +32,7 @@ package require Tcl 8.6
 package provide datelib 0.1.0
 
 namespace eval datelib {
+    variable now           [clock seconds]
     variable nonLeapModuli {100 200 300}
     variable dateRegexp    {^(?:(\d{4})-)?(\d{1,2})-(\d{1,2})$}
 
@@ -76,7 +77,8 @@ namespace eval datelib {
     ##
     # Return today's date as the (yyyy mm dd) list.
     proc today {} {
-        split [clock format [clock seconds] -format %Y-%m-%d] -
+        variable now
+        split [clock format $now -format %Y-%m-%d] -
     }
 
     ##
@@ -97,17 +99,12 @@ namespace eval datelib {
     }
 
     ##
-    # Handy wrapper around [clock seconds]
-    proc now {} {
-        clock seconds
-    }
-
-    ##
     # Handy wrapper around [clock format]. If val is empty, the current time is
     # used.
     proc cfmt {fmt {val {}}} {
+        variable now
         if {$val eq {}} {
-            set val [clock seconds]
+            set val $now
         }
         clock format $val -format $fmt
     }
@@ -115,15 +112,17 @@ namespace eval datelib {
     ##
     # Handy wrapper around [clock scan]
     proc cscn {fmt val} {
-        clock scan $val -format $fmt
+        variable now
+        clock scan $val -format $fmt  -base $now
     }
 
     ##
     # Handy wrappper around [clock add]. If val is empty, the current time is
     # used.
     proc cadd {count unit {val {}}} {
+        variable now
         if {$val eq {}} {
-            set val [clock seconds]
+            set val $now
         }
         clock add $val $count $unit
     }

@@ -56,6 +56,7 @@ array set conf {
     formatter                 cli
     formatter::cli::conf      {%B(%m-%d) %N}
     default_command           {next 10}
+    asof                      {}
 }
 
 namespace eval cmd {
@@ -206,6 +207,7 @@ proc usage {} {
     puts {OPTIONS}
     puts {  -h                      Print this help message and exist}
     puts {  -c <path>               Read config file from <path>}
+    puts {  -asof <today>           Pretend today is <today> (YYYY-mm-dd or mm-dd)}
     puts {  -provider <p>           Use provier <p> for data retrieval and storage}
     puts {  -provider::<p>::conf    Configuration for the provider <p>}
     puts {  -formatter <f>          Use formatter <f> to print}
@@ -251,6 +253,23 @@ proc main {} {
         }
         set ::conf($key) $val
         set ::argv [lreplace $::argv $idx $idx+1]
+    }
+
+    #
+    # Set datelib's now
+    #
+    if {$::conf(asof) ne {}} {
+        switch [string length $::conf(asof)] {
+            5 {
+                set ::datelib::now [::datelib::cscn %m-%d $::conf(asof)]
+            }
+            10 {
+                set ::datelib::now [::datelib::cscn %Y-%m-%d $::conf(asof)]
+            }
+            default {
+                return -code error "Usage: $::argv0 -asof \[YYYY-]mm-dd ..."
+            }
+        }
     }
 
     #
