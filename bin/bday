@@ -28,7 +28,6 @@
 #
 
 # TODO
-# - "by" grouping
 # - formatters (csv)
 # - importers
 
@@ -278,16 +277,6 @@ proc main {} {
     #
     if {[llength $::argv] == 0} {
         set ::argv $::conf(default_command)
-    }
-
-    #
-    # Parse "by ..." arguments
-    # TODO
-    #
-    set byIdx [lsearch $::argv by]
-    if {$byIdx != -1 && [llength $::argv] != $byIdx+1} {
-        set conf(by_fmt) [lindex $::argv $byIdx+1]
-        set ::argv [lreplace $::argv $byIdx $byIdx+1]
     }
 
     #
