@@ -1,0 +1,52 @@
+# vim: ft=tcl ts=4 sw=4 expandtab tw=80 colorcolumn=80
+
+package require tcltest
+namespace import -force ::tcltest::*
+
+set dir [file normalize [file dirname [info script]]]
+set dataFile [makeFile {} test.dat $dir]
+set cmd [list \
+         [info nameofexecutable] \
+         [file join [file dirname $dir] bin bday] \
+            -c /dev/null \
+            -provider textfile -provider::textfile::conf "path $dataFile" \
+            -formatter cli -formatter::cli::conf "%N %B(%m-%d)"]
+
+proc run {{arglist {}}} {
+    exec {*}[concat $::cmd $arglist]
+}
+
+test bday-1.1 {Default empty} -body {
+    run
+} -result {}
+
+test bday-1.2 {Add} -body {
+    run [list add "Leonardo da Vinci" 1452-04-15]
+} -result {}
+
+test bday-1.3 {For} -body {
+    run [list for "Leonardo da Vinci"]
+} -result {Leonardo da Vinci 04-15}
+
+test bday-1.4 {Remove} -body {
+    run [list remove "Leonardo da Vinci"]
+} -result {}
+
+test bday-1.5 {Check} -body {
+    run [list for "Leonardo da Vinci"]
+} -result {}
+
+test bday-1.6 {Set} -body {
+    run [list set "Leonardo da Vinci" 1452-04-15]
+} -result {}
+
+test bday-1.7 {Person} -body {
+    run [list "Leonardo da Vinci"]
+} -result {Leonardo da Vinci 04-15}
+
+test bday-1.8 {All} -body {
+    run [list all]
+} -result {Leonardo da Vinci 04-15}
+
+removeFile test.dat
+cleanupTests
