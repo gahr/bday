@@ -96,10 +96,12 @@ namespace eval cmd {
     proc cmd_for {b argv} {
         set r [list]
         foreach entry [$b getUpcoming] {
-            if {[dict get $entry person] ni $argv} {
-                continue
+            foreach p $argv {
+                if {![regexp -nocase ".*$p.*" [dict get $entry person]]} {
+                    continue
+                }
+                lappend r $entry
             }
-            lappend r $entry
         }
         ::print $r
     }
