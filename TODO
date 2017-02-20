@@ -1,0 +1,2 @@
+- Move search to provider using the getBirthday method. Providers will need to
+  provide a regexp-based search capability.
