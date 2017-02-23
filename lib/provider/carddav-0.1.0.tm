@@ -128,12 +128,12 @@ oo::class create provider::carddav {
 
         set headers [list Authorization \
                           "Basic [base64::encode ${user}:${pass}]" \
-                          Depth 1 Content-type {application/xml}]
+                          Depth 1 Content-type {application/xml; charset=utf-8}]
 
         set query {
             <C:addressbook-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
                 <D:prop>
-                    <C:address-data content-type="text/vcard">
+                    <C:address-data content-type="text/vcard" version="4.0">
                         <C:prop name="FN"/>
                         <C:prop name="BDAY"/>
                     </C:address-data>
@@ -199,6 +199,13 @@ oo::class create provider::carddav {
 
             if {$person ne {} && ![regexp -nocase ".*${person}.*" $fn_value]} {
                 continue
+            }
+
+            # Apple worksaround the lack of mm-dd only BDAYs in vCard 3 by
+            # defaulting to year 1604. See
+            # https://github.com/nextcloud/3rdparty/blob/ae67e91/sabre/vobject/lib/VCardConverter.php#L107-L119
+            if {![string compare -length 5 $bd_value {1604-}]} {
+                set bd_value [string replace $bd_value 0 3 0000]
             }
 
             lappend d [dict create person $fn_value birthday $bd_value]
