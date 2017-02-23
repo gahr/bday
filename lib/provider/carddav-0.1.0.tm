@@ -150,7 +150,12 @@ oo::class create provider::carddav {
             -query $query \
             -keepalive true]
         set xml [::http::data $tok]
+        set ncode [::http::ncode $tok]
+        set code [::http::code $tok]
         ::http::cleanup $tok
+        if {$ncode >= 400} {
+            return -code error "Error: $code"
+        }
 
         # Parse the response
         dom parse $xml doc
