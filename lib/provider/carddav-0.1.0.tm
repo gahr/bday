@@ -39,8 +39,11 @@ package require tdom
 
 oo::class create provider::carddav {
 
-    variable myurl
+    variable myhost
+    variable mypath
     variable myuser
+    variable mypass
+    variable myhead
 
     ##
     # Construct a CardDAV based provider.
@@ -49,11 +52,20 @@ oo::class create provider::carddav {
     # - url The full URL to the CardDAV resource. The string %%USER%% is
     #       substituted with the value of the "user" config entry (see above)
     constructor {config} {
-        variable myurl
+        variable myhost
+        variable mypath
         variable myuser
+        variable mypass
+        variable myhead
 
         set myuser [dict get $config user]
-        set myurl [string map [list %%USER%% $myuser] [dict get $config url]]
+        set mypass [my GetPass]
+        set url [string map [list %%USER%% $myuser] [dict get $config url]]
+        lassign [my ParseURL $url] myhost mypath
+        set myhead [list Authorization \
+                         "Basic [base64::encode ${myuser}:${mypass}]" \
+                         Depth 1 \
+                         Content-type {application/xml; charset=utf-8}]
     }
 
     ##
@@ -69,11 +81,7 @@ oo::class create provider::carddav {
     ##
     # Return a person's birthday, or the empty string if person wasn't found.
     method getBirthday {person} {
-        variable myurl
-        variable myuser
-        set mypass [my GetPass]
-
-        my Query $myurl $myuser $mypass $person
+        my Query $person
     }
 
     ##
@@ -86,11 +94,7 @@ oo::class create provider::carddav {
     # Return all birthdays in the CardDAV database. Only the basic "person"
     # and "birthday" attributes are supported by this implementation.
     method get {} {
-        variable myurl
-        variable myuser
-        set mypass [my GetPass]
-
-        my Query $myurl $myuser $mypass
+        my Query
     }
 
     ##
@@ -123,12 +127,96 @@ oo::class create provider::carddav {
     }
 
     ##
-    # Query CardDAV.
-    method Query {url user pass {person {}}} {
+    # Extract the host/path components of a URL
+    method ParseURL {url} {
+        if {![regexp {([^:]+://[^/]+)(?:/)?(.*)?} $url _ host path]} {
+            return -code error "Invalid url: $url"
+        }
+        return [list $host $path]
+    }
 
-        set headers [list Authorization \
-                          "Basic [base64::encode ${user}:${pass}]" \
-                          Depth 1 Content-type {application/xml; charset=utf-8}]
+    ##
+    # Find the CardDAV entry point
+    method FindCardDAVEntryPoint {} {
+        variable myhost
+        variable mypath
+        variable myhead
+
+        # If a path was not given, use the .well-known method, otherwise assume
+        # it's the correct one
+        if {$mypath eq {}} {
+            set tok [::http::geturl "$myhost/.well-known/carddav" \
+                -headers $myhead \
+                -keepalive true]
+            if {[::http::ncode $tok] == 302} {
+                if {[catch {dict get [::http::meta $tok] Location} location]} {
+                    return -code error \
+                    "Location header missing from 302 response"
+                }
+                lassign [my ParseURL $location] myhost mypath
+            }
+        }
+    }
+
+    ## 
+    # Find an addressbook resource
+    method FindAddressBook {path} {
+        variable myhost
+        variable myhead
+
+        set query {
+            <propfind xmlns="DAV:"><prop><resourcetype/></prop></propfind>
+        }
+        set tok [::http::geturl "$myhost/$path" \
+            -method PROPFIND \
+            -headers $myhead \
+            -query $query \
+            -keepalive true]
+        set ncode [::http::ncode $tok]
+        if {$ncode != 207} {
+            return -code error "Expected 207 response from PROPFIND $myhost/$path, got $ncode"
+        }
+        set xml [::http::data $tok]
+
+        dom parse $xml doc
+        $doc documentElement root
+        set ns {d DAV: card urn:ietf:params:xml:ns:carddav}
+        set base {/d:multistatus/d:response/d:propstat/d:prop/d:resourcetype/}
+        set href {/../../../../d:href}
+
+        # Try to find an addressbook
+        foreach href [$root selectNodes -namespaces $ns "${base}card:addressbook${href}"] {
+            return [$href text]
+        }
+
+        # Try to find inner collections
+        foreach href [$root selectNodes -namespaces $ns "${base}d:collection${href}"] {
+            if {[$href text] eq $path} {
+                # Skip self
+                continue
+            }
+
+            set path [my FindAddressBook [$href text]]
+            if {$path ne {}} {
+                return $path
+            }
+        }
+        return {}
+    }
+
+    ##
+    # Query CardDAV.
+    method Query {{person {}}} {
+        variable myhost
+        variable mypath
+        variable myhead
+
+        # Figure out the resource
+        my FindCardDAVEntryPoint
+        set address_book_path [my FindAddressBook $mypath]
+        if {$address_book_path eq {}} {
+            return -code error "No address books found"
+        }
 
         set query {
             <C:addressbook-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
@@ -144,9 +232,9 @@ oo::class create provider::carddav {
         set d [list]
 
         # Make the request
-        set tok [::http::geturl $url \
+        set tok [::http::geturl $myhost/$address_book_path \
             -method REPORT \
-            -headers $headers \
+            -headers $myhead \
             -query $query \
             -keepalive true]
         set xml [::http::data $tok]
