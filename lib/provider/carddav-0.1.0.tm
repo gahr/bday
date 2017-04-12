@@ -49,7 +49,7 @@ oo::class create provider::carddav {
     # Construct a CardDAV based provider.
     # Configuration MUST include
     # - user The username to access the CardDAV resource
-    # - url The full URL to the CardDAV resource. The string %%USER%% is
+    # - url The URL to the CardDAV server or resource. The string %%USER%% is
     #       substituted with the value of the "user" config entry (see above)
     constructor {config} {
         variable myhost
