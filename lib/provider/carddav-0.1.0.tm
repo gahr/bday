@@ -44,6 +44,7 @@ oo::class create provider::carddav {
     variable myuser
     variable mypass
     variable myhead
+    variable myverbose
 
     ##
     # Construct a CardDAV based provider.
@@ -66,6 +67,7 @@ oo::class create provider::carddav {
                          "Basic [base64::encode ${myuser}:${mypass}]" \
                          Depth 1 \
                          Content-type {application/xml; charset=utf-8}]
+        set myverbose [expr {![catch {dict get $config verbose}]}]
     }
 
     ##
@@ -100,6 +102,16 @@ oo::class create provider::carddav {
     ##
     # No-op. This is read only, so saving is not needed.
     method save {} { }
+
+    ##
+    # Log a message to stderr, if verbose true appears in the config
+    method Log {msg} {
+        variable myverbose
+        set fmt {%H:%M:%S}
+        if {$myverbose} {
+            puts stderr "[clock format [clock seconds] -format $fmt] $msg"
+        }
+    }
 
     ## 
     # Query for a password.
@@ -154,13 +166,14 @@ oo::class create provider::carddav {
                     "Location header missing from 302 response"
                 }
                 lassign [my ParseURL $location] myhost mypath
+                my Log "FindCardDAVEntryPoint - found $mypath"
             }
         }
     }
 
     ## 
     # Find an addressbook resource
-    method FindAddressBook {path} {
+    method FindAddressBook {path {recursing 0}} {
         variable myhost
         variable myhead
 
@@ -186,6 +199,9 @@ oo::class create provider::carddav {
 
         # Try to find an addressbook
         foreach href [$root selectNodes -namespaces $ns "${base}card:addressbook${href}"] {
+            if {!$recursing} {
+                my Log "FindAddressBook - found [$href text]"
+            }
             return [$href text]
         }
 
@@ -196,8 +212,11 @@ oo::class create provider::carddav {
                 continue
             }
 
-            set path [my FindAddressBook [$href text]]
+            set path [my FindAddressBook [$href text] 1]
             if {$path ne {}} {
+                if {!$recursing} {
+                    my Log "FindAddressBook - found $path"
+                }
                 return $path
             }
         }
