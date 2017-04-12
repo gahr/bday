@@ -198,7 +198,7 @@ oo::class create provider::carddav {
         set href {/../../../../d:href}
 
         # Try to find an addressbook
-        foreach href [$root selectNodes -namespaces $ns "${base}card:addressbook${href}"] {
+        foreach href [lreverse [$root selectNodes -namespaces $ns "${base}card:addressbook${href}"]] {
             if {!$recursing} {
                 my Log "FindAddressBook - found [$href text]"
             }
@@ -206,7 +206,7 @@ oo::class create provider::carddav {
         }
 
         # Try to find inner collections
-        foreach href [$root selectNodes -namespaces $ns "${base}d:collection${href}"] {
+        foreach href [lreverse [$root selectNodes -namespaces $ns "${base}d:collection${href}"]] {
             if {[$href text] eq $path} {
                 # Skip self
                 continue
