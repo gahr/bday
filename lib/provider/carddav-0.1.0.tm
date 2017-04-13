@@ -62,7 +62,10 @@ oo::class create provider::carddav {
         set myuser [dict get $config user]
         set mypass [my GetPass]
         set url [string map [list %%USER%% $myuser] [dict get $config url]]
-        lassign [my ParseURL $url] myhost mypath
+        lassign [my ParseSimpleRef $url] myhost mypath
+        if {$myhost eq {}} {
+            return -code error "Invalid URL in config: $url"
+        }
         set myhead [list Authorization \
                          "Basic [base64::encode ${myuser}:${mypass}]" \
                          Depth 1 \
@@ -139,13 +142,20 @@ oo::class create provider::carddav {
     }
 
     ##
-    # Extract the host/path components of a URL
-    method ParseURL {url} {
-        if {![regexp {([^:]+://[^/]+)(?:/)?(.*)?} $url _ host path]} {
-            return -code error "Invalid url: $url"
+    # Parse a Simple-ref, as defined in RFC4918, §8.3. WebDAV only recognizes
+    # two form or URLs, absolute URIs and absolute paths. This method extracts
+    # the host (formally Scheme + Authority) and the path (formally Path +
+    # Query + Fragment) parts of a URI, where the host part could be missing.
+    # https://tools.ietf.org/html/rfc4918#section-8.3
+    method ParseSimpleRef {uri} {
+        if {![regexp {([^:]+://[^/]+)?(/.*)?} $uri _ host path]} {
+            return -code error "Invalid URI: $uri"
         }
         return [list $host $path]
     }
+
+    ##
+    # Make a URI 
 
     ##
     # Find the CardDAV entry point
@@ -163,16 +173,23 @@ oo::class create provider::carddav {
             if {[::http::ncode $tok] == 302} {
                 if {[catch {dict get [::http::meta $tok] Location} location]} {
                     return -code error \
-                    "Location header missing from 302 response"
+                        "Response 302 missing Location header"
                 }
-                lassign [my ParseURL $location] myhost mypath
+                lassign [my ParseSimpleRef $location] myhost mypath
+                if {$myhost eq {}} {
+                    return -code error \
+                        "Response 302's Location header missing absolute URI:\
+                        $location"
+                }
                 my Log "FindCardDAVEntryPoint - found $mypath"
             }
         }
     }
 
     ## 
-    # Find an addressbook resource
+    # Find an addressbook resource within the collection starting at an
+    # absolute path. The return value is also either an absolute path or the
+    # empty string if no address book was found.
     method FindAddressBook {path {recursing 0}} {
         variable myhost
         variable myhead
@@ -186,6 +203,9 @@ oo::class create provider::carddav {
             -query $query \
             -keepalive true]
         set ncode [::http::ncode $tok]
+        if {$ncode == 401} {
+            return -code error "Unauthorized"
+        }
         if {$ncode != 207} {
             return -code error "Expected 207 response from PROPFIND $myhost/$path, got $ncode"
         }
@@ -197,30 +217,32 @@ oo::class create provider::carddav {
         set base {/d:multistatus/d:response/d:propstat/d:prop/d:resourcetype/}
         set href {/../../../../d:href}
 
+        set abook_uri {}
+
         # Try to find an addressbook
         foreach href [lreverse [$root selectNodes -namespaces $ns "${base}card:addressbook${href}"]] {
-            if {!$recursing} {
-                my Log "FindAddressBook - found [$href text]"
-            }
-            return [$href text]
+            set abook_uri [lindex [my ParseSimpleRef [$href text]] 1]
+            break
         }
 
         # Try to find inner collections
-        foreach href [lreverse [$root selectNodes -namespaces $ns "${base}d:collection${href}"]] {
-            if {[$href text] eq $path} {
-                # Skip self
-                continue
-            }
-
-            set path [my FindAddressBook [$href text] 1]
-            if {$path ne {}} {
-                if {!$recursing} {
-                    my Log "FindAddressBook - found $path"
+        if {$abook_uri eq {}} {
+            foreach href [lreverse [$root selectNodes -namespaces $ns "${base}d:collection${href}"]] {
+                set coll_path [lindex [my ParseSimpleRef [$href text]] 1]
+                if {$coll_path eq $path} {
+                    # Skip self
+                    continue
                 }
-                return $path
+
+                set abook_uri [my FindAddressBook $coll_path 1]
+                if {$abook_uri ne {}} {
+                    break
+                }
             }
         }
-        return {}
+
+        my Log "FindAddressBook - $path -> $abook_uri"
+        return $abook_uri
     }
 
     ##
@@ -250,6 +272,7 @@ oo::class create provider::carddav {
 
         set d [list]
 
+        set t [clock milliseconds]
         # Make the request
         set tok [::http::geturl $myhost/$address_book_path \
             -method REPORT \
@@ -263,6 +286,7 @@ oo::class create provider::carddav {
         if {$ncode >= 400} {
             return -code error "Error: $code"
         }
+        my Log "REPORT took [expr {[clock milliseconds] - $t}] ms"
 
         # Parse the response
         dom parse $xml doc
