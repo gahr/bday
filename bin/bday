@@ -95,6 +95,12 @@ namespace eval cmd {
     # Print people's birthdays
     proc cmd_for {b argv} {
         set r [list]
+        # This will be enough to push down filtering in the case where only
+        # a person is asked for. However, some backends just do exact match.
+        # if {[llength $argv] == 1} {
+        #     ::print [$b getBirthday $argv]
+        #     return
+        # }
         foreach entry [$b getUpcoming] {
             foreach p $argv {
                 if {![regexp -nocase ".*$p.*" [dict get $entry person]]} {
