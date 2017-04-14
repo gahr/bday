@@ -178,15 +178,14 @@ oo::class create provider::carddav {
 
     ##
     # Find the CardDAV entry point
-    method FindCardDAVEntryPoint {} {
+    method FindEntryPoint {path} {
         variable myhost
-        variable mypath
         variable myhead
 
         # If a path was not given, use the .well-known method, otherwise assume
         # it's the correct one
-        if {$mypath ne {/}} {
-            return
+        if {$path ne {/}} {
+            return $path
         }
 
         lassign [my MakeHttpReq "/.well-known/carddav"] ncode _ head
@@ -195,14 +194,16 @@ oo::class create provider::carddav {
                 return -code error \
                     "Response 302 missing Location header"
             }
-            lassign [my ParseSimpleRef $location] myhost mypath
+            lassign [my ParseSimpleRef $location] myhost path
             if {$myhost eq {}} {
                 return -code error \
                     "Response 302's Location header missing absolute URI:\
                     $location"
             }
-            my Log "FindCardDAVEntryPoint - found $mypath"
+            my Log "FindEntryPoint - $path"
         }
+
+        return $path
     }
 
     ## 
@@ -210,7 +211,6 @@ oo::class create provider::carddav {
     # absolute path. The return value is also either an absolute path or the
     # empty string if no address book was found.
     method FindAddressBook {path {recursing 0}} {
-        variable myhost
         variable myhead
 
         set query {
@@ -256,22 +256,8 @@ oo::class create provider::carddav {
     }
 
     ##
-    # Query CardDAV.
-    method Query {{person {}}} {
-        variable myhost
-        variable mypath
-        variable myhead
-
-        # Figure out the resource
-        my FindCardDAVEntryPoint
-        set path [my FindAddressBook $mypath]
-        if {$path eq {}} {
-            return -code error "No address books found"
-        }
-
-        set d [list]
-
-        # Make the request
+    # Execute a REPORT request
+    method MakeReportReq {path} {
         set query {
             <C:addressbook-query xmlns:D="DAV:"
                                  xmlns:C="urn:ietf:params:xml:ns:carddav">
@@ -288,17 +274,28 @@ oo::class create provider::carddav {
         if {$ncode != 207} {
             return -code error $code
         }
+        return $body
+    }
 
-        # Parse the response
-        dom parse $body doc
+    ##
+    # Parse the XML response of a REPORT request into a list of vcards
+    method ParseReportResp {report} {
+        dom parse $report doc
         $doc documentElement root
         set vcards [list]
         set ns {d DAV: card urn:ietf:params:xml:ns:carddav}
-        foreach node [$root selectNodes -namespaces $ns {/d:multistatus/d:response/d:propstat/d:prop/card:address-data}] {
+        set xp {/d:multistatus/d:response/d:propstat/d:prop/card:address-data}
+        foreach node [$root selectNodes -namespaces $ns $xp] {
             lappend vcards [$node text]
         }
+        return $vcards
+    }
 
-        # On each VCard
+    ##
+    # Parse a set of vcards into something we can return to the driver
+    method ParseVCards {vcards} {
+        set addresses [list]
+
         foreach vcard $vcards {
             # Fix end of lines
             set vcard [string map {"\r\n" "\n"} $vcard]
@@ -308,7 +305,8 @@ oo::class create provider::carddav {
             set lines [lmap l $lines {if {$l eq {}} { continue } { set l }}]
 
             # Check first and end line
-            if {[lindex $lines 0] ne {BEGIN:VCARD} || [lindex $lines end] ne {END:VCARD}} {
+            if {[lindex $lines 0]   ne {BEGIN:VCARD} ||
+                [lindex $lines end] ne {END:VCARD}} {
                 puts "Invalid vcard lines: $lines"
             }
 
@@ -329,14 +327,10 @@ oo::class create provider::carddav {
             }
 
             # FN element
-            regexp -nocase [my VCardLineRegexp FN] $fn _ fn_group fn_params fn_value
+            regexp -nocase [my VCardLineRegexp FN] $fn _ _ _ fn_value
 
             # BDAY element
-            regexp -nocase [my VCardLineRegexp BDAY] $bd _ bd_group bd_params bd_value
-
-            if {$person ne {} && ![regexp -nocase ".*${person}.*" $fn_value]} {
-                continue
-            }
+            regexp -nocase [my VCardLineRegexp BDAY] $bd _ _ _ bd_value
 
             # Apple worksaround the lack of mm-dd only BDAYs in vCard 3 by
             # defaulting to year 1604. See
@@ -345,10 +339,34 @@ oo::class create provider::carddav {
                 set bd_value [string replace $bd_value 0 3 0000]
             }
 
-            lappend d [dict create person $fn_value birthday $bd_value]
+            lappend addresses [dict create person $fn_value birthday $bd_value]
         }
 
-        set d
+        return $addresses
+    }
+
+    ##
+    # Filter the address dictionary based on a person
+    method FilterAddresses {person addresses} {
+        if {$person eq {}} {
+            return $addresses
+        }
+        set filtered [list]
+        foreach a $addresses {
+            if {[regexp -nocase ".*${person}.*" [dict get $a person]]} {
+                lappend filtered $a
+            }
+        }
+        return $filtered
+    }
+
+    ##
+    # Query CardDAV.
+    method Query {{person {}}} {
+        my Log "Query: $person"
+        my FilterAddresses $person [my ParseVCards [my ParseReportResp \
+           [my MakeReportReq [my FindAddressBook \
+           [my FindEntryPoint $mypath]]]]]
     }
 }
 
