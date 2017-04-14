@@ -58,6 +58,7 @@ oo::class create provider::carddav {
         variable myuser
         variable mypass
         variable myhead
+        variable myverbose 
 
         set myuser [dict get $config user]
         set mypass [my GetPass]
@@ -66,10 +67,10 @@ oo::class create provider::carddav {
         if {$myhost eq {}} {
             return -code error "Invalid URL in config: $url"
         }
-        set myhead [list Authorization \
-                         "Basic [base64::encode ${myuser}:${mypass}]" \
-                         Depth 1 \
-                         Content-type {application/xml; charset=utf-8}]
+        set myhead [list \
+            Authorization "Basic [base64::encode ${myuser}:${mypass}]" \
+            Depth 1 Content-Type {application/xml; charset=utf-8}]
+
         set myverbose [expr {![catch {dict get $config verbose}]}]
     }
 
@@ -112,7 +113,10 @@ oo::class create provider::carddav {
         variable myverbose
         set fmt {%H:%M:%S}
         if {$myverbose} {
-            puts stderr "[clock format [clock seconds] -format $fmt] $msg"
+            set t [clock milliseconds]
+            set s  [expr {$t / 1000}]
+            set ms [format %03d [expr {$t % 1000}]]
+            puts stderr "[clock format $s -format $fmt].$ms $msg"
         }
     }
 
@@ -146,16 +150,31 @@ oo::class create provider::carddav {
     # two form or URLs, absolute URIs and absolute paths. This method extracts
     # the host (formally Scheme + Authority) and the path (formally Path +
     # Query + Fragment) parts of a URI, where the host part could be missing.
+    # The path is always returned with a leading slash, even if empty in the
+    # original URI.
     # https://tools.ietf.org/html/rfc4918#section-8.3
     method ParseSimpleRef {uri} {
         if {![regexp {([^:]+://[^/]+)?(/.*)?} $uri _ host path]} {
             return -code error "Invalid URI: $uri"
         }
+        if {$path eq {}} {
+            set path /
+        }
         return [list $host $path]
     }
 
     ##
-    # Make a URI 
+    # Make an HTTP request
+    method MakeHttpReq {path {method GET} {query {}}} {
+        variable myhead
+        variable myhost
+
+        set tok [::http::geturl ${myhost}${path} -method $method \
+                                -headers $myhead \
+                                -query $query -keepalive 1]
+        list [::http::ncode $tok] [::http::code $tok] \
+             [::http::meta  $tok] [::http::data $tok]
+    }
 
     ##
     # Find the CardDAV entry point
@@ -166,23 +185,23 @@ oo::class create provider::carddav {
 
         # If a path was not given, use the .well-known method, otherwise assume
         # it's the correct one
-        if {$mypath eq {}} {
-            set tok [::http::geturl "$myhost/.well-known/carddav" \
-                -headers $myhead \
-                -keepalive true]
-            if {[::http::ncode $tok] == 302} {
-                if {[catch {dict get [::http::meta $tok] Location} location]} {
-                    return -code error \
-                        "Response 302 missing Location header"
-                }
-                lassign [my ParseSimpleRef $location] myhost mypath
-                if {$myhost eq {}} {
-                    return -code error \
-                        "Response 302's Location header missing absolute URI:\
-                        $location"
-                }
-                my Log "FindCardDAVEntryPoint - found $mypath"
+        if {$mypath ne {/}} {
+            return
+        }
+
+        lassign [my MakeHttpReq "/.well-known/carddav"] ncode _ head
+        if {$ncode == 302} {
+            if {[catch {dict get $head Location} location]} {
+                return -code error \
+                    "Response 302 missing Location header"
             }
+            lassign [my ParseSimpleRef $location] myhost mypath
+            if {$myhost eq {}} {
+                return -code error \
+                    "Response 302's Location header missing absolute URI:\
+                    $location"
+            }
+            my Log "FindCardDAVEntryPoint - found $mypath"
         }
     }
 
@@ -197,21 +216,12 @@ oo::class create provider::carddav {
         set query {
             <propfind xmlns="DAV:"><prop><resourcetype/></prop></propfind>
         }
-        set tok [::http::geturl "$myhost/$path" \
-            -method PROPFIND \
-            -headers $myhead \
-            -query $query \
-            -keepalive true]
-        set ncode [::http::ncode $tok]
-        if {$ncode == 401} {
-            return -code error "Unauthorized"
-        }
+        lassign [my MakeHttpReq $path PROPFIND $query] ncode code head body
         if {$ncode != 207} {
-            return -code error "Expected 207 response from PROPFIND $myhost/$path, got $ncode"
+            return -code error $code
         }
-        set xml [::http::data $tok]
 
-        dom parse $xml doc
+        dom parse $body doc
         $doc documentElement root
         set ns {d DAV: card urn:ietf:params:xml:ns:carddav}
         set base {/d:multistatus/d:response/d:propstat/d:prop/d:resourcetype/}
@@ -254,42 +264,33 @@ oo::class create provider::carddav {
 
         # Figure out the resource
         my FindCardDAVEntryPoint
-        set address_book_path [my FindAddressBook $mypath]
-        if {$address_book_path eq {}} {
+        set path [my FindAddressBook $mypath]
+        if {$path eq {}} {
             return -code error "No address books found"
         }
 
+        set d [list]
+
+        # Make the request
         set query {
-            <C:addressbook-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+            <C:addressbook-query xmlns:D="DAV:"
+                                 xmlns:C="urn:ietf:params:xml:ns:carddav">
                 <D:prop>
-                    <C:address-data content-type="text/vcard" version="4.0">
+                    <C:address-data content-type="text/vcard"
+                                    version="4.0">
                         <C:prop name="FN"/>
                         <C:prop name="BDAY"/>
                     </C:address-data>
                 </D:prop>
             </C:addressbook-query>
         }
-
-        set d [list]
-
-        set t [clock milliseconds]
-        # Make the request
-        set tok [::http::geturl $myhost/$address_book_path \
-            -method REPORT \
-            -headers $myhead \
-            -query $query \
-            -keepalive true]
-        set xml [::http::data $tok]
-        set ncode [::http::ncode $tok]
-        set code [::http::code $tok]
-        ::http::cleanup $tok
-        if {$ncode >= 400} {
-            return -code error "Error: $code"
+        lassign [my MakeHttpReq $path REPORT $query] ncode code head body
+        if {$ncode != 207} {
+            return -code error $code
         }
-        my Log "REPORT took [expr {[clock milliseconds] - $t}] ms"
 
         # Parse the response
-        dom parse $xml doc
+        dom parse $body doc
         $doc documentElement root
         set vcards [list]
         set ns {d DAV: card urn:ietf:params:xml:ns:carddav}
