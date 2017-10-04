@@ -4,7 +4,7 @@ TCLLAUNCHER?=	${PREFIX}/bin/tcllauncher
 
 .PHONY: test
 test:
-	${TCLSH} test/all.tcl ${TESTFLAGS}
+	LC_ALL=en_US.UTF-8 ${TCLSH} test/all.tcl ${TESTFLAGS}
 
 install:
 	rm -rf ${PREFIX}/lib/bday
