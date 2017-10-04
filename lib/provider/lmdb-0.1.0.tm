@@ -50,7 +50,7 @@ oo::class create provider::lmdb {
 
         set myenv [lmdb env]
         try {
-            $myenv open -path [dict get $config path] -nosubdir 1 -fixedmap 0
+            $myenv open -path [file normalize [dict get $config path]] -nosubdir 1 -fixedmap 0
         } on error msg {
             return -code error $msg
         }
