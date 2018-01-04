@@ -110,6 +110,9 @@ oo::class create provider::carddav {
             lmap vcard [$abook searchVCards FN $person] {
                 set fn [$vcard getFirstValue FN]
                 set bd [$vcard getFirstValue BDAY]
+                # VCard stores non-specified years as a dash. We need to turn
+                # them into 0000.
+                regsub {^-} $bd 0000 bd
                 expr {$bd eq {} ? [continue]
                                 : [dict create person $fn birthday $bd]}
             }
